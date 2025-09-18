@@ -1,10 +1,35 @@
 {
-  "name": "n8n-nodes-bgremove",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "n8n-nodes-bgremove",          // ОБЯЗАТЕЛЬНО: начинается с n8n-nodes-
+  "version": "0.1.0",                    // увеличивай при каждом publish
+  "description": "Remove background locally using transparent-background",
+  "author": "kotlf<artkotlf@gmail.com>",
+  "license": "MIT",
+  "main": "dist/RemoveBg.node.js",
+  "types": "dist/RemoveBg.node.d.ts",
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "prepare": "npm run build"
   },
-  "private": true
+  "dependencies": {
+    "transparent-background": "*"
+  },
+  "devDependencies": {
+    "n8n-core": "^1.47.0",
+    "n8n-workflow": "^1.47.0",
+    "typescript": "^5.4.0"
+  },
+  "n8n": {
+    "nodes": [
+      {
+        "name": "RemoveBg.node.js",
+        "type": "n8n-nodes-bgremove.RemoveBg"
+      }
+    ]
+  }
 }

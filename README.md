@@ -15,9 +15,4 @@ No servers/sidecars. Outputs PNG/JPEG/WEBP with transparency supported for PNG.
   - **New Binary Property**: e.g. `bg_removed`
   - **Output Format**: `png` | `jpeg` | `webp`
 
-## Dev / Publish
-```bash
-npm i
-npm run build
-npm publish --access public
-```
+
