@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-bgremove",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Remove background locally using transparent-background",
   "author": "kotlf<artkotlf@gmail.com>",
   "license": "MIT",
