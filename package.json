@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "build": "tsc && node -e \"require('fs').cpSync('assets','dist/assets',{recursive:true})\"",
-    "prepare": "npm run build"
+    "prepare": "npm run build  && node scripts/build-rembg-node.js"
   },
   "dependencies": {
     "jimp": "^0.22.10",
