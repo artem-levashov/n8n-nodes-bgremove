@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-bgremove",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Remove image background",
   "author": "kotlf<artkotlf@gmail.com>",
   "license": "MIT",
