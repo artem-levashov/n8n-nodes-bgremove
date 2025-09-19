@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-bgremove",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Remove image background",
   "author": "kotlf<artkotlf@gmail.com>",
   "license": "MIT",
@@ -17,7 +17,6 @@
     "feather",
     "flatten"
   ],
-
   "main": "dist/RemoveBg.node.js",
   "types": "dist/RemoveBg.node.d.ts",
   "files": [
