@@ -34,9 +34,10 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RemoveBg = void 0;
+const fs_1 = require("fs");
+const path_1 = require("path");
 const isBuffer = (v) => Buffer.isBuffer(v);
 const hasData = (v) => isBuffer(v) && v.length > 0;
-/** helpers */
 function toBuffer(v) {
     if (Buffer.isBuffer(v))
         return v;
@@ -82,7 +83,7 @@ async function tbOnce(tb, input, format, opts) {
         throw new Error('transparent-background entry not found');
     const res = await fn(input, format, opts || {});
     const out = toBuffer(res);
-    if (!out.length)
+    if (!hasData(out))
         throw new Error('transparent-background empty');
     return out;
 }
@@ -92,9 +93,19 @@ async function rembgOnce(mod, input) {
         throw new Error('rembg-node remove() not found');
     const res = await fn(input);
     const out = toBuffer(res);
-    if (!out.length)
+    if (!hasData(out))
         throw new Error('rembg-node empty');
     return out;
+}
+function canLoadRembg() {
+    try {
+        const pkg = require.resolve('rembg-node/package.json');
+        const dir = (0, path_1.dirname)(pkg);
+        return (0, fs_1.existsSync)((0, path_1.join)(dir, 'dist', 'index.js'));
+    }
+    catch {
+        return false;
+    }
 }
 function hexToRgb(hex) {
     const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
@@ -163,7 +174,7 @@ class RemoveBg {
             name: 'removeBgLocal',
             icon: 'file:assets/icon.svg',
             group: ['transform'],
-            version: 4,
+            version: 5,
             description: 'Background removal using rembg-node or transparent-background with chroma key fallback',
             defaults: { name: 'Remove Background (Local)' },
             inputs: ['main'],
@@ -175,24 +186,13 @@ class RemoveBg {
                     default: 'png' },
                 { displayName: 'New Binary Property', name: 'newBinaryPropertyName', type: 'string', default: 'bg_removed' },
                 { displayName: 'Engine', name: 'engine', type: 'options',
-                    options: [
-                        { name: 'Auto (rembg-node → tb)', value: 'auto' },
-                        { name: 'rembg-node (JS)', value: 'rembg' },
-                        { name: 'transparent-background', value: 'tb' }
-                    ],
-                    default: 'auto',
-                    description: 'Choose preferred engine. Auto tries rembg-node first, then transparent-background.'
-                },
+                    options: [{ name: 'Auto (rembg-node → tb)', value: 'auto' }, { name: 'rembg-node (JS)', value: 'rembg' }, { name: 'transparent-background', value: 'tb' }],
+                    default: 'auto' },
                 { displayName: 'Fast Mode (tb only)', name: 'fast', type: 'boolean', default: false },
                 { displayName: 'Chroma Key', name: 'ckMode', type: 'options',
-                    options: [
-                        { name: 'Off', value: 'off' },
-                        { name: 'Auto (sample corners)', value: 'auto' },
-                        { name: 'By Color', value: 'color' },
-                    ],
+                    options: [{ name: 'Off', value: 'off' }, { name: 'Auto (sample corners)', value: 'auto' }, { name: 'By Color', value: 'color' }],
                     default: 'off' },
-                { displayName: 'Chroma Color (when By Color)', name: 'ckColor', type: 'string', default: '#2A4FB9',
-                    displayOptions: { show: { ckMode: ['color'] } } },
+                { displayName: 'Chroma Color (when By Color)', name: 'ckColor', type: 'string', default: '#2A4FB9', displayOptions: { show: { ckMode: ['color'] } } },
                 { displayName: 'Chroma Tolerance (0–120)', name: 'ckTolerance', type: 'number', default: 28, typeOptions: { minValue: 1, maxValue: 120 } },
                 { displayName: 'Chroma Feather', name: 'ckFeather', type: 'number', default: 12, typeOptions: { minValue: 0, maxValue: 200 } },
                 { displayName: 'Write Debug (_bgremove)', name: 'writeDebug', type: 'boolean', default: true },
@@ -223,10 +223,12 @@ class RemoveBg {
                 let output = null;
                 let usedFormat = format;
                 const tryRembg = async () => {
+                    if (!canLoadRembg())
+                        throw new Error('rembg-node dist missing (not built)');
                     const mod = require('rembg-node');
                     dbg.rembgKeys = Object.keys(mod || {});
                     output = await rembgOnce(mod, input);
-                    usedFormat = 'png'; // rembg обычно возвращает PNG с альфой
+                    usedFormat = 'png';
                     dbg.tries.push({ engine: 'rembg', ok: true });
                 };
                 const tryTb = async (fmt) => {
@@ -252,7 +254,7 @@ class RemoveBg {
                         dbg.tries.push({ engine: 'tb', ok: false, err: (e === null || e === void 0 ? void 0 : e.message) || String(e) });
                     }
                 }
-                else { // auto
+                else {
                     try {
                         await tryRembg();
                     }
@@ -266,14 +268,10 @@ class RemoveBg {
                         }
                     }
                 }
-                // chroma key fallback / post
-                if (ckMode !== 'off' && !hasData(output)) {
+                if (!hasData(output) && ckMode !== 'off') {
                     const base = hasData(output) ? output : input;
-                    ;
                     try {
-                        output = ckMode === 'auto'
-                            ? await chromaKeyAuto(base, ckTolerance, ckFeather)
-                            : await chromaKeyColor(base, ckColor, ckTolerance, ckFeather);
+                        output = ckMode === 'auto' ? await chromaKeyAuto(base, ckTolerance, ckFeather) : await chromaKeyColor(base, ckColor, ckTolerance, ckFeather);
                         usedFormat = 'png';
                         dbg.chromaApplied = { mode: ckMode, tolerance: ckTolerance, feather: ckFeather };
                     }
@@ -281,9 +279,8 @@ class RemoveBg {
                         dbg.chromaError = (e === null || e === void 0 ? void 0 : e.message) || String(e);
                     }
                 }
-                if (!output || !output.length)
+                if (!hasData(output))
                     throw new Error('No output from selected engines (and chroma key if enabled)');
-                // write binary
                 const src = item.binary[binKey];
                 const baseName = (src.fileName || 'image').replace(/\.[^.]+$/, '');
                 const ext = usedFormat === 'jpeg' ? 'jpg' : usedFormat;
