@@ -48,37 +48,39 @@ const toBuffer = (v) => {
         return Buffer.from(v, 'binary');
     return Buffer.from([]);
 };
-async function runTransparentBackground(input, ext, dbg) {
+async function callTB(input, ext, engine, dbg) {
     var _a;
-    // Dynamic ESM import to support pure-ESM package
     const mod = await Promise.resolve().then(() => __importStar(require('transparent-background')));
     const tb = (_a = mod.transparentBackground) !== null && _a !== void 0 ? _a : mod.default;
     dbg.exportKeys = Object.keys(mod);
     dbg.funcType = typeof tb;
+    dbg.engine = engine || 'auto';
     if (typeof tb !== 'function')
         throw new Error('transparent-background export not found');
-    // Try the README signature first: (input, ext, opts)
-    const opts = { engine: 'wasm', fast: true };
+    const opts = { fast: true };
+    if (engine)
+        opts.engine = engine;
+    // try signature #1
     try {
         const r = await tb(input, ext, opts);
-        const out = toBuffer(r);
-        if (out.length)
-            return out;
-        dbg.sig1Empty = true;
+        const b = toBuffer(r);
+        if (b.length)
+            return b;
+        dbg.s1 = 'empty';
     }
     catch (e) {
-        dbg.sig1Error = (e === null || e === void 0 ? void 0 : e.message) || String(e);
+        dbg.s1err = (e === null || e === void 0 ? void 0 : e.message) || String(e);
     }
-    // Fallback signature: (input, { format, ... })
+    // try signature #2
     try {
         const r = await tb(input, { format: ext, ...opts });
-        const out = toBuffer(r);
-        if (out.length)
-            return out;
-        dbg.sig2Empty = true;
+        const b = toBuffer(r);
+        if (b.length)
+            return b;
+        dbg.s2 = 'empty';
     }
     catch (e) {
-        dbg.sig2Error = (e === null || e === void 0 ? void 0 : e.message) || String(e);
+        dbg.s2err = (e === null || e === void 0 ? void 0 : e.message) || String(e);
     }
     throw new Error('No output from transparent-background');
 }
@@ -89,7 +91,7 @@ class RemoveBg {
             name: 'removeBgMinimal',
             icon: 'file:assets/icon.svg',
             group: ['transform'],
-            version: 2,
+            version: 3,
             description: 'Remove image background with transparent-background (WASM). No extra options.',
             defaults: { name: 'Remove Background (Minimal)' },
             inputs: ['main'],
@@ -106,6 +108,9 @@ class RemoveBg {
     async execute() {
         const items = this.getInputData();
         const out = [];
+        // ensure temp is writable
+        process.env.TMPDIR = process.env.TMPDIR || '/tmp';
+        process.env.TEMP = process.env.TEMP || '/tmp';
         for (let i = 0; i < items.length; i++) {
             const dbg = { step: 'start' };
             try {
@@ -118,7 +123,24 @@ class RemoveBg {
                 const input = await this.helpers.getBinaryDataBuffer(i, binKey);
                 dbg.inputBytes = input.length;
                 const ext = (format === 'jpeg') ? 'jpg' : format;
-                const output = await runTransparentBackground(input, ext, dbg);
+                let output = null;
+                // Try wasm first, then "auto" (no engine) to let lib pick fallback.
+                try {
+                    output = await callTB(input, ext, 'wasm', dbg);
+                }
+                catch (e) {
+                    dbg.wasmFail = (e === null || e === void 0 ? void 0 : e.message) || String(e);
+                }
+                if (!output || output.length === 0) {
+                    try {
+                        output = await callTB(input, ext, undefined, dbg);
+                    }
+                    catch (e) {
+                        dbg.autoFail = (e === null || e === void 0 ? void 0 : e.message) || String(e);
+                    }
+                }
+                if (!output || output.length === 0)
+                    throw new Error('No output files');
                 const src = item.binary[binKey];
                 const base = (src.fileName || 'image').replace(/\.[^.]+$/, '');
                 const outExt = (format === 'jpeg') ? 'jpg' : format;

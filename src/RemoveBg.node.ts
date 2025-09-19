@@ -12,35 +12,32 @@ const toBuffer = (v: any): Buffer => {
   return Buffer.from([]);
 };
 
-async function runTransparentBackground(input: Buffer, ext: 'png'|'jpg'|'webp', dbg: any): Promise<Buffer> {
-  // Dynamic ESM import to support pure-ESM package
+async function callTB(input: Buffer, ext: 'png'|'jpg'|'webp', engine: 'wasm'|undefined, dbg: any) {
   const mod: any = await import('transparent-background');
   const tb: any = mod.transparentBackground ?? mod.default;
   dbg.exportKeys = Object.keys(mod);
   dbg.funcType = typeof tb;
-
+  dbg.engine = engine || 'auto';
   if (typeof tb !== 'function') throw new Error('transparent-background export not found');
 
-  // Try the README signature first: (input, ext, opts)
-  const opts = { engine: 'wasm', fast: true };
-  try {
-    const r = await tb(input, ext, opts as any);
-    const out = toBuffer(r);
-    if (out.length) return out;
-    dbg.sig1Empty = true;
-  } catch (e:any) {
-    dbg.sig1Error = e?.message || String(e);
-  }
+  const opts: any = { fast: true };
+  if (engine) opts.engine = engine;
 
-  // Fallback signature: (input, { format, ... })
+  // try signature #1
   try {
-    const r = await tb(input, { format: ext, ...opts } as any);
-    const out = toBuffer(r);
-    if (out.length) return out;
-    dbg.sig2Empty = true;
-  } catch (e:any) {
-    dbg.sig2Error = e?.message || String(e);
-  }
+    const r = await tb(input, ext, opts);
+    const b = toBuffer(r);
+    if (b.length) return b;
+    dbg.s1 = 'empty';
+  } catch (e:any) { dbg.s1err = e?.message || String(e); }
+
+  // try signature #2
+  try {
+    const r = await tb(input, { format: ext, ...opts });
+    const b = toBuffer(r);
+    if (b.length) return b;
+    dbg.s2 = 'empty';
+  } catch (e:any) { dbg.s2err = e?.message || String(e); }
 
   throw new Error('No output from transparent-background');
 }
@@ -51,7 +48,7 @@ export class RemoveBg implements INodeType {
     name: 'removeBgMinimal',
     icon: 'file:assets/icon.svg',
     group: ['transform'],
-    version: 2,
+    version: 3,
     description: 'Remove image background with transparent-background (WASM). No extra options.',
     defaults: { name: 'Remove Background (Minimal)' },
     inputs: ['main'],
@@ -69,6 +66,10 @@ export class RemoveBg implements INodeType {
     const items = this.getInputData();
     const out: INodeExecutionData[] = [];
 
+    // ensure temp is writable
+    process.env.TMPDIR = process.env.TMPDIR || '/tmp';
+    process.env.TEMP = process.env.TEMP || '/tmp';
+
     for (let i = 0; i < items.length; i++) {
       const dbg: any = { step: 'start' };
       try {
@@ -82,7 +83,18 @@ export class RemoveBg implements INodeType {
         dbg.inputBytes = input.length;
 
         const ext = (format === 'jpeg') ? 'jpg' : (format as any);
-        const output = await runTransparentBackground(input, ext, dbg);
+        let output: Buffer | null = null;
+
+        // Try wasm first, then "auto" (no engine) to let lib pick fallback.
+        try { output = await callTB(input, ext, 'wasm', dbg); }
+        catch (e:any) { dbg.wasmFail = e?.message || String(e); }
+
+        if (!output || output.length === 0) {
+          try { output = await callTB(input, ext, undefined, dbg); }
+          catch (e:any) { dbg.autoFail = e?.message || String(e); }
+        }
+
+        if (!output || output.length === 0) throw new Error('No output files');
 
         const src = item.binary[binKey]!;
         const base = (src.fileName || 'image').replace(/\.[^.]+$/, '');
