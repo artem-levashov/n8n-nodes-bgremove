@@ -7,10 +7,17 @@
   "keywords": [
     "n8n",
     "image",
-    "background removal",
+    "background",
     "transparent-background",
-    "rembg"
+    "wasm",
+    "onnx",
+    "segmentation",
+    "chroma key",
+    "trim",
+    "feather",
+    "flatten"
   ],
+
   "main": "dist/RemoveBg.node.js",
   "types": "dist/RemoveBg.node.d.ts",
   "files": [
@@ -26,9 +33,7 @@
   },
   "dependencies": {
     "jimp": "^0.22.10",
-    "rembg-node": "^2.0.2",
-    "sharp": "^0.30.7",
-    "transparent-background": "1.3.0"
+    "transparent-background": "1.5.0"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
