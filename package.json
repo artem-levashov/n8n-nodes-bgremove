@@ -1,6 +1,6 @@
 {
-  "name": "n8n-nodes-bgremove",          // ОБЯЗАТЕЛЬНО: начинается с n8n-nodes-
-  "version": "0.1.0",                    // увеличивай при каждом publish
+  "name": "n8n-nodes-bgremove",
+  "version": "0.1.1",
   "description": "Remove background locally using transparent-background",
   "author": "kotlf<artkotlf@gmail.com>",
   "license": "MIT",
@@ -27,9 +27,9 @@
   "n8n": {
     "nodes": [
       {
-        "name": "RemoveBg.node.js",
-        "type": "n8n-nodes-bgremove.RemoveBg"
+        "nodeClassFileName": "src/RemoveBg.node.ts"
       }
-    ]
+    ],
+    "credentials": []
   }
 }
