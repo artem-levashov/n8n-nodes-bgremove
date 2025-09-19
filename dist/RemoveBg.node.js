@@ -40,15 +40,48 @@ const toBuffer = (v) => {
     if (v && typeof v === 'object') {
         if (ArrayBuffer.isView(v))
             return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
-        if (v instanceof ArrayBuffer)
-            return Buffer.from(v);
-        if (Array.isArray(v.data))
-            return Buffer.from(v.data);
+        const d = v.data;
+        if (d && (Array.isArray(d) || ArrayBuffer.isView(d)))
+            return Buffer.from(d);
     }
     if (typeof v === 'string')
         return Buffer.from(v, 'binary');
     return Buffer.from([]);
 };
+async function runTransparentBackground(input, ext, dbg) {
+    var _a;
+    // Dynamic ESM import to support pure-ESM package
+    const mod = await Promise.resolve().then(() => __importStar(require('transparent-background')));
+    const tb = (_a = mod.transparentBackground) !== null && _a !== void 0 ? _a : mod.default;
+    dbg.exportKeys = Object.keys(mod);
+    dbg.funcType = typeof tb;
+    if (typeof tb !== 'function')
+        throw new Error('transparent-background export not found');
+    // Try the README signature first: (input, ext, opts)
+    const opts = { engine: 'wasm', fast: true };
+    try {
+        const r = await tb(input, ext, opts);
+        const out = toBuffer(r);
+        if (out.length)
+            return out;
+        dbg.sig1Empty = true;
+    }
+    catch (e) {
+        dbg.sig1Error = (e === null || e === void 0 ? void 0 : e.message) || String(e);
+    }
+    // Fallback signature: (input, { format, ... })
+    try {
+        const r = await tb(input, { format: ext, ...opts });
+        const out = toBuffer(r);
+        if (out.length)
+            return out;
+        dbg.sig2Empty = true;
+    }
+    catch (e) {
+        dbg.sig2Error = (e === null || e === void 0 ? void 0 : e.message) || String(e);
+    }
+    throw new Error('No output from transparent-background');
+}
 class RemoveBg {
     constructor() {
         this.description = {
@@ -56,7 +89,7 @@ class RemoveBg {
             name: 'removeBgMinimal',
             icon: 'file:assets/icon.svg',
             group: ['transform'],
-            version: 1,
+            version: 2,
             description: 'Remove image background with transparent-background (WASM). No extra options.',
             defaults: { name: 'Remove Background (Minimal)' },
             inputs: ['main'],
@@ -71,7 +104,6 @@ class RemoveBg {
         };
     }
     async execute() {
-        var _a;
         const items = this.getInputData();
         const out = [];
         for (let i = 0; i < items.length; i++) {
@@ -84,16 +116,9 @@ class RemoveBg {
                 if (!item.binary || !item.binary[binKey])
                     throw new Error(`No binary property '${binKey}'.`);
                 const input = await this.helpers.getBinaryDataBuffer(i, binKey);
-                // Minimal call exactly like README example (WASM engine, fast=true)
-                const mod = await Promise.resolve().then(() => __importStar(require('transparent-background')));
-                const tb = (_a = mod.transparentBackground) !== null && _a !== void 0 ? _a : mod.default;
-                if (typeof tb !== 'function')
-                    throw new Error('transparent-background export not found');
+                dbg.inputBytes = input.length;
                 const ext = (format === 'jpeg') ? 'jpg' : format;
-                const res = await tb(input, ext, { engine: 'wasm', fast: true });
-                const output = toBuffer(res);
-                if (!output || output.length === 0)
-                    throw new Error('transparent-background returned empty output');
+                const output = await runTransparentBackground(input, ext, dbg);
                 const src = item.binary[binKey];
                 const base = (src.fileName || 'image').replace(/\.[^.]+$/, '');
                 const outExt = (format === 'jpeg') ? 'jpg' : format;
@@ -107,7 +132,7 @@ class RemoveBg {
             catch (e) {
                 const item = items[i];
                 const fail = { json: { ...item.json }, binary: item.binary };
-                fail.json._bgremove = { ok: false, error: (e === null || e === void 0 ? void 0 : e.message) || String(e) };
+                fail.json._bgremove = { ok: false, error: (e === null || e === void 0 ? void 0 : e.message) || String(e), ...dbg };
                 out.push(fail);
             }
         }
