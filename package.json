@@ -27,7 +27,7 @@
   "n8n": {
     "nodes": [
       {
-        "nodeClassFileName": "src/RemoveBg.node.ts"
+        "nodeClassFileName": "dist/RemoveBg.node.js"
       }
     ],
     "credentials": []
