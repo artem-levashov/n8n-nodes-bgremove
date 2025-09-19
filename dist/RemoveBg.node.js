@@ -34,6 +34,8 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RemoveBg = void 0;
+const isBuffer = (v) => Buffer.isBuffer(v);
+const hasData = (v) => isBuffer(v) && v.length > 0;
 /** helpers */
 function toBuffer(v) {
     if (Buffer.isBuffer(v))
@@ -50,29 +52,48 @@ function toBuffer(v) {
         return Buffer.from(v, 'binary');
     return Buffer.from(v || []);
 }
-function pickFn(mod) {
+function pickFn(mod, key) {
     if (!mod)
         return null;
+    if (key && typeof mod[key] === 'function')
+        return mod[key];
     if (typeof mod.transparentBackground === 'function')
         return mod.transparentBackground;
+    if (typeof mod.remove === 'function')
+        return mod.remove;
     if (mod.default) {
-        if (typeof mod.default.transparentBackground === 'function')
-            return mod.default.transparentBackground;
-        if (typeof mod.default === 'function')
-            return mod.default;
+        const d = mod.default;
+        if (key && typeof d[key] === 'function')
+            return d[key];
+        if (typeof d.transparentBackground === 'function')
+            return d.transparentBackground;
+        if (typeof d.remove === 'function')
+            return d.remove;
+        if (typeof d === 'function')
+            return d;
     }
     if (typeof mod === 'function')
         return mod;
     return null;
 }
-async function tryOnce(tb, inputBuffer, format, opts) {
-    const fn = pickFn(tb);
+async function tbOnce(tb, input, format, opts) {
+    const fn = pickFn(tb, 'transparentBackground');
     if (!fn)
-        throw new Error('transparent-background entry function not found');
-    const res = await fn(inputBuffer, format, opts || {});
+        throw new Error('transparent-background entry not found');
+    const res = await fn(input, format, opts || {});
     const out = toBuffer(res);
-    if (!out || !out.length)
-        throw new Error('transparentBackground returned empty output');
+    if (!out.length)
+        throw new Error('transparent-background empty');
+    return out;
+}
+async function rembgOnce(mod, input) {
+    const fn = pickFn(mod, 'remove');
+    if (!fn)
+        throw new Error('rembg-node remove() not found');
+    const res = await fn(input);
+    const out = toBuffer(res);
+    if (!out.length)
+        throw new Error('rembg-node empty');
     return out;
 }
 function hexToRgb(hex) {
@@ -82,13 +103,10 @@ function hexToRgb(hex) {
     const n = parseInt(m[1], 16);
     return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
-function distSq(a, b) {
-    const dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b;
-    return dr * dr + dg * dg + db * db;
-}
-async function chromaKeyAuto(input, tolerance = 28, feather = 12) {
+function distSq(a, b) { const dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b; return dr * dr + dg * dg + db * db; }
+async function chromaKeyAuto(buf, tolerance = 28, feather = 12) {
     const Jimp = (await Promise.resolve().then(() => __importStar(require('jimp')))).default || require('jimp');
-    const img = await Jimp.read(input);
+    const img = await Jimp.read(buf);
     const { width: w, height: h, data } = img.bitmap;
     const sample = (x0, y0, x1, y1) => {
         let r = 0, g = 0, b = 0, c = 0;
@@ -119,10 +137,10 @@ async function chromaKeyAuto(input, tolerance = 28, feather = 12) {
     }
     return await img.getBufferAsync(Jimp.MIME_PNG);
 }
-async function chromaKeyColor(input, colorHex, tolerance = 28, feather = 12) {
+async function chromaKeyColor(buf, colorHex, tolerance = 28, feather = 12) {
     const key = hexToRgb(colorHex);
     const Jimp = (await Promise.resolve().then(() => __importStar(require('jimp')))).default || require('jimp');
-    const img = await Jimp.read(input);
+    const img = await Jimp.read(buf);
     const { width: w, height: h, data } = img.bitmap;
     const t2 = tolerance * tolerance, f2 = (tolerance + Math.max(1, feather)) ** 2;
     for (let i = 0; i < w * h; i++) {
@@ -138,7 +156,6 @@ async function chromaKeyColor(input, colorHex, tolerance = 28, feather = 12) {
     }
     return await img.getBufferAsync(Jimp.MIME_PNG);
 }
-/** node */
 class RemoveBg {
     constructor() {
         this.description = {
@@ -146,8 +163,8 @@ class RemoveBg {
             name: 'removeBgLocal',
             icon: 'file:assets/icon.svg',
             group: ['transform'],
-            version: 3,
-            description: 'Remove image background using the transparent-background npm package, with optional chroma key fallback',
+            version: 4,
+            description: 'Background removal using rembg-node or transparent-background with chroma key fallback',
             defaults: { name: 'Remove Background (Local)' },
             inputs: ['main'],
             outputs: ['main'],
@@ -157,18 +174,28 @@ class RemoveBg {
                     options: [{ name: 'PNG', value: 'png' }, { name: 'JPEG', value: 'jpeg' }, { name: 'WEBP', value: 'webp' }],
                     default: 'png' },
                 { displayName: 'New Binary Property', name: 'newBinaryPropertyName', type: 'string', default: 'bg_removed' },
-                { displayName: 'Fast Mode', name: 'fast', type: 'boolean', default: false },
-                { displayName: 'Engine Preference', name: 'enginePref', type: 'options',
-                    options: [{ name: 'Auto', value: 'auto' }, { name: 'WASM', value: 'wasm' }, { name: 'ONNX Runtime', value: 'onnx' }],
-                    default: 'auto' },
-                { displayName: 'Write Debug (_bgremove)', name: 'writeDebug', type: 'boolean', default: true },
+                { displayName: 'Engine', name: 'engine', type: 'options',
+                    options: [
+                        { name: 'Auto (rembg-node → tb)', value: 'auto' },
+                        { name: 'rembg-node (JS)', value: 'rembg' },
+                        { name: 'transparent-background', value: 'tb' }
+                    ],
+                    default: 'auto',
+                    description: 'Choose preferred engine. Auto tries rembg-node first, then transparent-background.'
+                },
+                { displayName: 'Fast Mode (tb only)', name: 'fast', type: 'boolean', default: false },
                 { displayName: 'Chroma Key', name: 'ckMode', type: 'options',
-                    options: [{ name: 'Off', value: 'off' }, { name: 'Auto (sample corners)', value: 'auto' }, { name: 'By Color', value: 'color' }],
+                    options: [
+                        { name: 'Off', value: 'off' },
+                        { name: 'Auto (sample corners)', value: 'auto' },
+                        { name: 'By Color', value: 'color' },
+                    ],
                     default: 'off' },
                 { displayName: 'Chroma Color (when By Color)', name: 'ckColor', type: 'string', default: '#2A4FB9',
                     displayOptions: { show: { ckMode: ['color'] } } },
-                { displayName: 'Chroma Tolerance (0-120)', name: 'ckTolerance', type: 'number', default: 28, typeOptions: { minValue: 1, maxValue: 120 } },
-                { displayName: 'Chroma Feather (soft edge)', name: 'ckFeather', type: 'number', default: 12, typeOptions: { minValue: 0, maxValue: 200 } },
+                { displayName: 'Chroma Tolerance (0–120)', name: 'ckTolerance', type: 'number', default: 28, typeOptions: { minValue: 1, maxValue: 120 } },
+                { displayName: 'Chroma Feather', name: 'ckFeather', type: 'number', default: 12, typeOptions: { minValue: 0, maxValue: 200 } },
+                { displayName: 'Write Debug (_bgremove)', name: 'writeDebug', type: 'boolean', default: true },
             ],
         };
     }
@@ -181,62 +208,72 @@ class RemoveBg {
                 const binKey = this.getNodeParameter('binaryPropertyName', i, 'data');
                 const newKey = this.getNodeParameter('newBinaryPropertyName', i, 'bg_removed');
                 const format = this.getNodeParameter('outputFormat', i, 'png');
+                const engine = this.getNodeParameter('engine', i, 'auto');
                 const fast = this.getNodeParameter('fast', i, false);
-                const enginePref = this.getNodeParameter('enginePref', i, 'auto');
-                const writeDebug = this.getNodeParameter('writeDebug', i, true);
                 const ckMode = this.getNodeParameter('ckMode', i, 'off');
                 const ckColor = ckMode === 'color' ? this.getNodeParameter('ckColor', i, '#2A4FB9') : '#2A4FB9';
                 const ckTolerance = this.getNodeParameter('ckTolerance', i, 28);
                 const ckFeather = this.getNodeParameter('ckFeather', i, 12);
+                const writeDebug = this.getNodeParameter('writeDebug', i, true);
                 const item = items[i];
                 if (!item.binary || !item.binary[binKey])
                     throw new Error(`Item ${i} has no binary property '${binKey}'.`);
-                const inputBuffer = (await this.helpers.getBinaryDataBuffer(i, binKey));
-                dbg.inputBytes = Buffer.byteLength(inputBuffer);
-                let tb;
-                try {
-                    tb = require('transparent-background');
-                    dbg.moduleLoaded = true;
-                    dbg.moduleKeys = Object.keys(tb || {});
-                }
-                catch {
-                    throw new Error('transparent-background is not installed in this package');
-                }
-                const optSets = [];
-                const base = { fast: !!fast, engine: enginePref !== 'auto' ? enginePref : undefined };
-                optSets.push(base);
-                optSets.push({ fast: !base.fast, engine: base.engine });
-                if (enginePref !== 'wasm')
-                    optSets.push({ fast: false, engine: 'wasm' });
-                if (enginePref !== 'onnx')
-                    optSets.push({ fast: false, engine: 'onnx' });
-                if (format !== 'png')
-                    optSets.push({ fast: base.fast, engine: base.engine, __forcePng: true });
+                const input = await this.helpers.getBinaryDataBuffer(i, binKey);
+                dbg.inputBytes = Buffer.byteLength(input);
                 let output = null;
                 let usedFormat = format;
-                for (const opts of optSets) {
-                    const attempt = { opts: { ...opts } };
+                const tryRembg = async () => {
+                    const mod = require('rembg-node');
+                    dbg.rembgKeys = Object.keys(mod || {});
+                    output = await rembgOnce(mod, input);
+                    usedFormat = 'png'; // rembg обычно возвращает PNG с альфой
+                    dbg.tries.push({ engine: 'rembg', ok: true });
+                };
+                const tryTb = async (fmt) => {
+                    const mod = require('transparent-background');
+                    dbg.tbKeys = Object.keys(mod || {});
+                    output = await tbOnce(mod, input, fmt, { fast });
+                    usedFormat = fmt;
+                    dbg.tries.push({ engine: 'tb', format: fmt, ok: true, fast });
+                };
+                if (engine === 'rembg') {
                     try {
-                        const f = opts.__forcePng ? 'png' : format;
-                        const res = await tryOnce(tb, inputBuffer, f, { fast: opts.fast, engine: opts.engine });
-                        output = res;
-                        usedFormat = f;
-                        attempt.ok = true;
-                        dbg.tries.push(attempt);
-                        break;
+                        await tryRembg();
                     }
                     catch (e) {
-                        attempt.err = (e === null || e === void 0 ? void 0 : e.message) || String(e);
-                        dbg.tries.push(attempt);
+                        dbg.tries.push({ engine: 'rembg', ok: false, err: (e === null || e === void 0 ? void 0 : e.message) || String(e) });
                     }
                 }
-                if (ckMode !== 'off') {
-                    const baseForCk = (output === null || output === void 0 ? void 0 : output.length) ? output : inputBuffer;
+                else if (engine === 'tb') {
                     try {
-                        if (ckMode === 'auto')
-                            output = await chromaKeyAuto(baseForCk, ckTolerance, ckFeather);
-                        else
-                            output = await chromaKeyColor(baseForCk, ckColor, ckTolerance, ckFeather);
+                        await tryTb(format);
+                    }
+                    catch (e) {
+                        dbg.tries.push({ engine: 'tb', ok: false, err: (e === null || e === void 0 ? void 0 : e.message) || String(e) });
+                    }
+                }
+                else { // auto
+                    try {
+                        await tryRembg();
+                    }
+                    catch (e) {
+                        dbg.tries.push({ engine: 'rembg', ok: false, err: (e === null || e === void 0 ? void 0 : e.message) || String(e) });
+                        try {
+                            await tryTb(format);
+                        }
+                        catch (e2) {
+                            dbg.tries.push({ engine: 'tb', ok: false, err: (e2 === null || e2 === void 0 ? void 0 : e2.message) || String(e2) });
+                        }
+                    }
+                }
+                // chroma key fallback / post
+                if (ckMode !== 'off' && !hasData(output)) {
+                    const base = hasData(output) ? output : input;
+                    ;
+                    try {
+                        output = ckMode === 'auto'
+                            ? await chromaKeyAuto(base, ckTolerance, ckFeather)
+                            : await chromaKeyColor(base, ckColor, ckTolerance, ckFeather);
                         usedFormat = 'png';
                         dbg.chromaApplied = { mode: ckMode, tolerance: ckTolerance, feather: ckFeather };
                     }
@@ -245,22 +282,23 @@ class RemoveBg {
                     }
                 }
                 if (!output || !output.length)
-                    throw new Error('No output after segmentation/chroma-key');
-                const srcInfo = items[i].binary[binKey];
-                const baseName = (srcInfo.fileName || 'image').replace(/\.[^.]+$/, '');
+                    throw new Error('No output from selected engines (and chroma key if enabled)');
+                // write binary
+                const src = item.binary[binKey];
+                const baseName = (src.fileName || 'image').replace(/\.[^.]+$/, '');
                 const ext = usedFormat === 'jpeg' ? 'jpg' : usedFormat;
                 const mime = usedFormat === 'jpeg' ? 'image/jpeg' : `image/${usedFormat}`;
                 const newItem = { json: { ...item.json }, binary: item.binary || {} };
                 newItem.binary[newKey] = await this.helpers.prepareBinaryData(output, `${baseName}.${ext}`);
                 newItem.binary[newKey].mimeType = mime;
                 if (writeDebug)
-                    newItem.json._bgremove = { ok: true, inputBytes: dbg.inputBytes, tries: dbg.tries, chroma: dbg.chromaApplied, chromaError: dbg.chromaError };
+                    newItem.json._bgremove = { ok: true, ...dbg };
                 out.push(newItem);
             }
             catch (e) {
                 const item = items[i];
                 const fail = { json: { ...item.json }, binary: item.binary };
-                fail.json._bgremove = { ok: false, error: (e === null || e === void 0 ? void 0 : e.message) || String(e) };
+                fail.json._bgremove = { ok: false, error: (e === null || e === void 0 ? void 0 : e.message) || String(e), ...dbg };
                 out.push(fail);
             }
         }
