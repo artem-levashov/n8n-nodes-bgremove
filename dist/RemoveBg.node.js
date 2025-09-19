@@ -34,6 +34,10 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RemoveBg = void 0;
+// ensure tmp and sharp env are sane in Docker
+process.env.SHARP_IGNORE_GLOBAL_LIBVIPS = process.env.SHARP_IGNORE_GLOBAL_LIBVIPS || '1';
+process.env.TMPDIR = process.env.TMPDIR || '/tmp';
+process.env.TEMP = process.env.TEMP || '/tmp';
 const toBuffer = (v) => {
     if (Buffer.isBuffer(v))
         return v;
@@ -48,42 +52,6 @@ const toBuffer = (v) => {
         return Buffer.from(v, 'binary');
     return Buffer.from([]);
 };
-async function callTB(input, ext, engine, dbg) {
-    var _a;
-    const mod = await Promise.resolve().then(() => __importStar(require('transparent-background')));
-    const tb = (_a = mod.transparentBackground) !== null && _a !== void 0 ? _a : mod.default;
-    dbg.exportKeys = Object.keys(mod);
-    dbg.funcType = typeof tb;
-    dbg.engine = engine || 'auto';
-    if (typeof tb !== 'function')
-        throw new Error('transparent-background export not found');
-    const opts = { fast: true };
-    if (engine)
-        opts.engine = engine;
-    // try signature #1
-    try {
-        const r = await tb(input, ext, opts);
-        const b = toBuffer(r);
-        if (b.length)
-            return b;
-        dbg.s1 = 'empty';
-    }
-    catch (e) {
-        dbg.s1err = (e === null || e === void 0 ? void 0 : e.message) || String(e);
-    }
-    // try signature #2
-    try {
-        const r = await tb(input, { format: ext, ...opts });
-        const b = toBuffer(r);
-        if (b.length)
-            return b;
-        dbg.s2 = 'empty';
-    }
-    catch (e) {
-        dbg.s2err = (e === null || e === void 0 ? void 0 : e.message) || String(e);
-    }
-    throw new Error('No output from transparent-background');
-}
 class RemoveBg {
     constructor() {
         this.description = {
@@ -91,8 +59,8 @@ class RemoveBg {
             name: 'removeBgMinimal',
             icon: 'file:assets/icon.svg',
             group: ['transform'],
-            version: 3,
-            description: 'Remove image background with transparent-background (WASM). No extra options.',
+            version: 5,
+            description: 'Remove image background with transparent-background (WASM). Minimal call path.',
             defaults: { name: 'Remove Background (Minimal)' },
             inputs: ['main'],
             outputs: ['main'],
@@ -106,11 +74,9 @@ class RemoveBg {
         };
     }
     async execute() {
+        var _a;
         const items = this.getInputData();
         const out = [];
-        // ensure temp is writable
-        process.env.TMPDIR = process.env.TMPDIR || '/tmp';
-        process.env.TEMP = process.env.TEMP || '/tmp';
         for (let i = 0; i < items.length; i++) {
             const dbg = { step: 'start' };
             try {
@@ -123,22 +89,15 @@ class RemoveBg {
                 const input = await this.helpers.getBinaryDataBuffer(i, binKey);
                 dbg.inputBytes = input.length;
                 const ext = (format === 'jpeg') ? 'jpg' : format;
-                let output = null;
-                // Try wasm first, then "auto" (no engine) to let lib pick fallback.
-                try {
-                    output = await callTB(input, ext, 'wasm', dbg);
-                }
-                catch (e) {
-                    dbg.wasmFail = (e === null || e === void 0 ? void 0 : e.message) || String(e);
-                }
-                if (!output || output.length === 0) {
-                    try {
-                        output = await callTB(input, ext, undefined, dbg);
-                    }
-                    catch (e) {
-                        dbg.autoFail = (e === null || e === void 0 ? void 0 : e.message) || String(e);
-                    }
-                }
+                const mod = await Promise.resolve().then(() => __importStar(require('transparent-background')));
+                const tb = (_a = mod.transparentBackground) !== null && _a !== void 0 ? _a : mod.default;
+                dbg.exportKeys = Object.keys(mod);
+                dbg.funcType = typeof tb;
+                if (typeof tb !== 'function')
+                    throw new Error('transparent-background export not found');
+                // Only the official signature: (input, 'png'|'jpg'|'webp', { fast: true })
+                const res = await tb(input, ext, { fast: true });
+                const output = toBuffer(res);
                 if (!output || output.length === 0)
                     throw new Error('No output files');
                 const src = item.binary[binKey];
